@@ -1,0 +1,121 @@
+---
+title: "Predicting Correct Exercise Form"
+author: "DC"
+date: "Sunday, October 25, 2015"
+output: html_document
+---
+
+#Introduction
+Human activity recognition is an area of increasing interest for many people that want to monitor their daily activities. Monitoring behaviour patterns with human activity recognition devices such as the Jawbone UP, Nike FuelBan, and Fitbit are helping people closely monitor their exercise routines while improving their health.
+
+#Data
+Data was taken from accelerometers placed on the belt, forearm, arm, and dumbbell of six different people. Each participant was asked to perform barbell lifts with the attached accelerometers. Barbell lifts were performed by each participant using correct form for the exercise, then each participant also performed the barbell lifts using five specifically different types of incorrect form that are common errors when preforming the barbell lift. 
+
+The barbell lifts were performed in 6 different ways by each participant and a data set was compiled from the readings taken from the attached accelerometers. Each form of the barbell lift that was performed was labeled as A,B,C,D,E depending on the way the barbell lift was performed. Data sets and further information can be attained at http://groupware.les.inf.puc-rio.br/har#ixzz3H2DPDMtO
+
+References
+Data for this analysis was provided by Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+#Aim of Study and Study Design
+In this study, we will use the training data provided to develop a predictive model that predicts the method in which the participants performed the barbell lifts for the data in the test set. We will use the random forest model in this study, given that random forests are usually one of the two top performing algorithms in practice and are known to be very accurate.
+
+We begin by partitioning the training data into a training set and a validation set using a 70:30 split. The training set is used to train and refine the model, where the rfcv function from the R randomForest package is used for cross validation and feature selection. The aim is to produce a model that has a maximum out of sample error rate of 3%. 
+
+The validation set will be used to validate the training model and estimate out of sample error once we have finished training the model.
+
+```{r load data, include=FALSE}
+training <- read.csv("pml-training.csv", na.strings="NA")
+
+test<- read.csv("pml-testing.csv", na.strings="NA")
+
+#Remove the columns with NA values to prepare dataset for randomForest package
+#We remove columns with more than 5000 NA values
+
+missing <- sapply(training, function(x) sum(is.na(x)))
+
+#index columns with NA values > 2000
+deleteindex <- which(missing > 2000)
+
+#subset training set and remove columns with more than 2000 NA values
+training1 <- training[-c(deleteindex)]
+
+
+#index columns with null values > 2000
+null <- sapply(training1, function(x) sum(x==""))
+deleteindex2 <- which(null > 2000)
+
+#subset training set and remove columns with more than 2000 null values
+training.clean <- training1[-c(deleteindex2)]
+
+#Remove the user name columns and time columns to avoid generalisation problem in the data
+training.clean <- training.clean[,-c(1:7)]
+
+library(caret)
+library(randomForest)
+set.seed(1122)
+
+#Partition training dataset
+intrain <- createDataPartition(y=training.clean$classe, p=0.7, list=FALSE) 
+train <- training.clean[intrain,]
+vali <- training.clean[-intrain,]
+```
+
+Now that we have created the various datasets, we conduct feature selection on the training set using the rfcv function.
+
+```{r feature selection, cache=TRUE, echo=TRUE}
+crossval<- rfcv(train[,c(1:52)], train[,53], cv.fold=5, scale="log", step=0.75)
+```
+
+We plot the cross validation error rate by the number of predictors used in the model. As seen in the plot below, the error rate drop significantly as the number of predictors used in the model increases from 1 to 9. As the number of predictors increases beyond 9, the error rate levels off.
+
+```{r errorplot, echo=TRUE}
+with(crossval, plot(n.var, error.cv, log="x", type="o", lwd=2,
+                    xlab="Number of Variables", ylab="Error Rate"))
+title(main="Plot Of Estimated Error Rate")
+
+```
+
+
+We estimate an error rate for the model, which comes to about 1.2% when 9 variables are used. This is lower than our target of 3%.
+
+```{r Gini, echo=FALSE}
+crossval$error.cv
+```
+
+We first create a random forest model using all the predictors, before we sieve out the 9 most critical predictors from it.
+
+```{r training model, cache=TRUE, echo=TRUE}
+
+modelfit <- randomForest(train[,c(1:52)], train$classe, importance=TRUE)
+
+varImpPlot(modelfit)
+
+#Get the meanginidecrease of the predictors and extract the nine highest values
+varimp <- sort(importance(modelfit)[,3], decreasing=TRUE)
+varimp.top <- varimp[1:9]
+top.pred <- names(varimp.top)
+```
+
+Now, we create a new random forest model using just these top 9 predictors.
+
+```{r new model, cache=TRUE, echo=TRUE}
+#Subset out the 9 predictors and classe predictor from training set
+train.new <- train[ , top.pred]
+train.new$classe <- train[,53]
+
+model.new <- randomForest(train.new[,c(1:9)], train.new$classe)
+```
+
+We apply this new model to the validation set, and we evaluate the accuracy of the new model compared to the actual validation data. 
+
+```{r validate}
+pred <- predict(model.new, vali)
+
+```
+
+
+```{r oos, echo=FALSE}
+oos <- mean(pred == vali$classe)
+```
+
+The accuracy of the model is about `r oos`. The out of sample error is about 1.4%, which is lower than the 3% we targeted.
